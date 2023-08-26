@@ -5,13 +5,18 @@ from copy import deepcopy
 from json import dumps
 
 import frappe
-import pandas as pd
 from frappe.utils.data import cstr
 
 from insights.api import fetch_column_values, get_tables
+from insights.utils import InsightsDataSource, InsightsQuery, InsightsTable
 
 from ..insights_data_source.sources.query_store import sync_query_store
-from .utils import InsightsTable, get_columns_with_inferred_types
+from .utils import (
+    BaseNestedQueryImporter,
+    apply_cumulative_sum,
+    get_columns_with_inferred_types,
+    update_sql,
+)
 
 DEFAULT_FILTERS = dumps(
     {
@@ -109,9 +114,7 @@ class InsightsLegacyQueryClient:
                 if expression:
                     # check if expression is an object
                     row.expression = (
-                        dumps(expression, indent=2)
-                        if isinstance(expression, dict)
-                        else expression
+                        dumps(expression, indent=2) if isinstance(expression, dict) else expression
                     )
                 break
 
@@ -155,9 +158,7 @@ class InsightsLegacyQueryClient:
 
     @frappe.whitelist()
     def fetch_tables(self):
-        with_query_tables = frappe.db.get_single_value(
-            "Insights Settings", "allow_subquery"
-        )
+        with_query_tables = frappe.db.get_single_value("Insights Settings", "allow_subquery")
         return get_tables(self.data_source, with_query_tables)
 
     @frappe.whitelist()
@@ -252,14 +253,11 @@ class InsightsLegacyQueryController(InsightsLegacyQueryValidation):
     def __init__(self, doc):
         self.doc = doc
 
+    def before_save(self):
+        update_sql(self.doc)
+
     def after_reset(self):
         self.doc.filters = DEFAULT_FILTERS
-
-    def get_sql(self):
-        return self.doc._data_source.build_query(self.doc, with_cte=True)
-
-    def get_columns(self):
-        return self.get_columns_from_results(self.doc.retrieve_results())
 
     def get_columns_from_results(self, results):
         if not results:
@@ -333,28 +331,91 @@ class InsightsLegacyQueryController(InsightsLegacyQueryValidation):
     def before_fetch(self):
         if self.doc.data_source != "Query Store":
             return
-        sub_stored_queries = [
-            t.table for t in self.doc.tables if t.table != self.doc.name
-        ]
+        sub_stored_queries = [t.table for t in self.doc.tables if t.table != self.doc.name]
         sync_query_store(sub_stored_queries, force=True)
 
-    def after_fetch_results(self, results):
-        if self.has_cumulative_columns():
-            results = self.apply_cumulative_sum(results)
-        return results
+    def after_fetch(self, results):
+        if not self.has_cumulative_columns():
+            return results
+
+        columns = [
+            col for col in self.doc.columns if col.aggregation and "Cumulative" in col.aggregation
+        ]
+        return apply_cumulative_sum(columns, results)
 
     def has_cumulative_columns(self):
-        return any(
-            col.aggregation and "Cumulative" in col.aggregation
-            for col in self.doc.columns
+        return any(col.aggregation and "Cumulative" in col.aggregation for col in self.doc.columns)
+
+    def fetch_results(self):
+        return InsightsDataSource.get_doc(self.doc.data_source).run_query(self.doc)
+
+    def export_query(self):
+        selected_tables = self.get_selected_tables()
+        selected_table_names = [table.table for table in selected_tables]
+        subqueries = frappe.get_all(
+            "Insights Table",
+            filters={
+                "table": ["in", selected_table_names],
+                "is_query_based": 1,
+            },
+            pluck="table",
         )
+        dependencies = {}
+        for subquery in subqueries:
+            if subquery in dependencies:
+                continue
+            query = InsightsQuery.get_doc(subquery)
+            dependencies[query.name] = frappe.parse_json(query.export())
 
-    def apply_cumulative_sum(self, results):
-        column_names = [d["label"] for d in results[0]]
-        results_df = pd.DataFrame(results[1:], columns=column_names)
+        query_dict = self.doc.as_dict()
+        return {
+            "query": {
+                "tables": query_dict["tables"],
+                "columns": query_dict["columns"],
+                "filters": query_dict["filters"],
+                "limit": query_dict["limit"],
+            },
+            "subqueries": dependencies,
+        }
 
-        for column in self.doc.columns:
-            if "Cumulative" in column.aggregation:
-                results_df[column.label] = results_df[column.label].cumsum()
+    def import_query(self, exported_query):
+        return LegacyQueryImporter(exported_query, self.doc).import_query()
 
-        return [results[0]] + results_df.values.tolist()
+
+class LegacyQueryImporter(BaseNestedQueryImporter):
+    def _update_doc(self):
+        self.doc.set("tables", self.data.query["tables"])
+        self.doc.set("columns", self.data.query["columns"])
+        self.doc.set("filters", self.data.query["filters"])
+        self.doc.set("limit", self.data.query["limit"])
+
+    def _update_subquery_references(self):
+        for old_name, new_name in self.imported_queries.items():
+            self._rename_subquery_in_table(old_name, new_name)
+            self._rename_subquery_in_joins(old_name, new_name)
+            self._rename_subquery_in_columns(old_name, new_name)
+            self._rename_subquery_in_filters(old_name, new_name)
+
+    def _rename_subquery_in_table(self, old_name, new_name):
+        for table in self.data.query["tables"]:
+            if table["table"] == old_name:
+                table["table"] = new_name
+
+    def _rename_subquery_in_joins(self, old_name, new_name):
+        for table in self.data.query["tables"]:
+            if not table["join"]:
+                continue
+            join = frappe.parse_json(table["join"])
+            if join["with"]["value"] == old_name:
+                join["with"]["value"] = new_name
+                join["with"]["table"] = new_name
+                table["join"] = dumps(join, indent=2)
+
+    def _rename_subquery_in_columns(self, old_name, new_name):
+        for column in self.data.query["columns"]:
+            if column["table"] == old_name:
+                column["table"] = new_name
+
+    def _rename_subquery_in_filters(self, old_name, new_name):
+        # do a hacky string replace for now
+        self.data.query["filters"] = self.data.query["filters"].replace(old_name, new_name)

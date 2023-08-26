@@ -29,15 +29,15 @@ export const API_METHODS = {
 
 	addTransform: 'add_transform',
 	resetTransforms: 'reset_transforms',
-	getSourceSchema: 'get_source_schema',
 	get_chart_name: 'get_chart_name',
 
 	run: 'run',
-	get_source_schema: 'get_source_schema',
 	get_chart_name: 'get_chart_name',
 	convert_to_native: 'convert_to_native',
 	convert_to_assisted: 'convert_to_assisted',
 	get_tables_columns: 'get_tables_columns',
+	save_as_table: 'save_as_table',
+	delete_linked_table: 'delete_linked_table',
 }
 
 export function useQueryResource(name) {
@@ -45,6 +45,7 @@ export function useQueryResource(name) {
 	const resource = createDocumentResource({
 		doctype: 'Insights Query',
 		name: name,
+		auto: false,
 		whitelistedMethods: API_METHODS,
 		transform(doc) {
 			doc.columns = doc.columns.map((c) => {

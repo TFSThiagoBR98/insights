@@ -15,7 +15,7 @@
 						v-model="newTable"
 						:options="query.tables.newTableOptions"
 						placeholder="Select a table..."
-						@change="addNewTable"
+						@update:modelValue="addNewTable"
 					/>
 				</div>
 				<Button icon="x" @click="addingTable = false"></Button>
@@ -76,7 +76,7 @@ import JoinLeftIcon from '@/components/Icons/JoinLeftIcon.vue'
 import JoinRightIcon from '@/components/Icons/JoinRightIcon.vue'
 import JoinInnerIcon from '@/components/Icons/JoinInnerIcon.vue'
 import JoinFullIcon from '@/components/Icons/JoinFullIcon.vue'
-import Autocomplete from '@/components/Controls/Autocomplete.vue'
+
 import TableJoiner from './TableJoiner.vue'
 
 import { inject, ref, watch } from 'vue'

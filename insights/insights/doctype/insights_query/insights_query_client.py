@@ -5,7 +5,7 @@
 import frappe
 from frappe.utils import cint
 
-from .utils import InsightsChart
+from insights.utils import InsightsChart
 
 
 class InsightsQueryClient:
@@ -78,9 +78,13 @@ class InsightsQueryClient:
         self.save()
 
     @frappe.whitelist()
-    def get_source_schema(self):
-        return self._data_source.get_schema()
-
-    @frappe.whitelist()
     def get_chart_name(self):
         return InsightsChart.get_name(query=self.name)
+
+    @frappe.whitelist()
+    def save_as_table(self):
+        return self.update_insights_table(force=True)
+
+    @frappe.whitelist()
+    def delete_linked_table(self):
+        return self.delete_insights_table()

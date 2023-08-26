@@ -54,15 +54,9 @@ class Aggregations:
 class ColumnFormatter:
     @classmethod
     def format(cls, format_options: dict, column_type: str, column: Column) -> Column:
-        if (
-            format_options
-            and format_options.date_format
-            and column_type in ("Date", "Datetime")
-        ):
+        if format_options and format_options.date_format and column_type in ("Date", "Datetime"):
             date_format = format_options.date_format
-            date_format = (
-                date_format if type(date_format) == str else date_format.get("value")
-            )
+            date_format = date_format if type(date_format) == str else date_format.get("value")
             return cls.format_date(date_format, column)
         return column
 
@@ -112,15 +106,9 @@ class ColumnFormatter:
 
 def get_descendants(node, tree, include_self=False):
     Tree = table(tree, sa_column("lft"), sa_column("rgt"), sa_column("name"))
-    lft_rgt = (
-        select([Tree.c.lft, Tree.c.rgt]).where(Tree.c.name == node).alias("lft_rgt")
-    )
+    lft_rgt = select([Tree.c.lft, Tree.c.rgt]).where(Tree.c.name == node).alias("lft_rgt")
     return (
-        (
-            select([Tree.c.name])
-            .where(Tree.c.lft > lft_rgt.c.lft)
-            .where(Tree.c.rgt < lft_rgt.c.rgt)
-        )
+        (select([Tree.c.name]).where(Tree.c.lft > lft_rgt.c.lft).where(Tree.c.rgt < lft_rgt.c.rgt))
         if not include_self
         else (
             select([Tree.c.name])
@@ -232,9 +220,7 @@ class Functions:
         if function == "timespan":
             column = args[0]
             timespan = args[1].lower()  # "last 7 days"
-            timespan = (
-                timespan[:-1] if timespan.endswith("s") else timespan
-            )  # "last 7 day"
+            timespan = timespan[:-1] if timespan.endswith("s") else timespan  # "last 7 day"
 
             units = [
                 "day",
@@ -267,9 +253,7 @@ class Functions:
             ]
             unit = args[0].upper()
             if unit not in VALID_UNITS:
-                raise Exception(
-                    f"Invalid unit {unit}. Valid units are {', '.join(VALID_UNITS)}"
-                )
+                raise Exception(f"Invalid unit {unit}. Valid units are {', '.join(VALID_UNITS)}")
             return func.timestampdiff(text(unit), args[1], args[2])
 
         if function == "descendants":
@@ -293,9 +277,7 @@ class Functions:
             valid_units = ["day", "week", "month", "quarter", "year"]
             unit = args[0].lower()
             if unit not in valid_units:
-                raise Exception(
-                    f"Invalid unit {unit}. Valid units are {', '.join(valid_units)}"
-                )
+                raise Exception(f"Invalid unit {unit}. Valid units are {', '.join(valid_units)}")
             return ColumnFormatter.format_date(args[0].title(), args[1])
 
         raise NotImplementedError(f"Function {function} not implemented")
@@ -318,19 +300,17 @@ def get_current_date_range(unit):
 
 
 def get_fiscal_year_start_date():
-    return getdate(
-        frappe.db.get_single_value("Insights Settings", "fiscal_year_start")
-        or "1995-04-01"
-    )
+    fiscal_year_start = frappe.db.get_single_value("Insights Settings", "fiscal_year_start")
+    if not fiscal_year_start or get_date_str(fiscal_year_start) == "0001-01-01":
+        return getdate("1995-04-01")
+    return getdate(fiscal_year_start)
 
 
 def get_fy_start(date):
     fy_start = get_fiscal_year_start_date()
     dt = getdate(date)  # eg. 2019-01-01
     if dt.month < fy_start.month:
-        return getdate(
-            f"{dt.year - 1}-{fy_start.month}-{fy_start.day}"
-        )  # eg. 2018-04-01
+        return getdate(f"{dt.year - 1}-{fy_start.month}-{fy_start.day}")  # eg. 2018-04-01
     return getdate(f"{dt.year}-{fy_start.month}-{fy_start.day}")  # eg. 2019-04-01
 
 
@@ -353,9 +333,7 @@ def get_directional_date_range(direction, unit, number_of_unit):
         ]
     if unit == "week":
         dates = [
-            get_first_day_of_week(
-                add_to_date(today, days=direction * 7 * number_of_unit)
-            ),
+            get_first_day_of_week(add_to_date(today, days=direction * 7 * number_of_unit)),
             get_last_day_of_week(add_to_date(today, days=direction * 7)),
         ]
     if unit == "month":
@@ -365,15 +343,18 @@ def get_directional_date_range(direction, unit, number_of_unit):
         ]
     if unit == "quarter":
         dates = [
-            get_quarter_start(
-                add_to_date(today, months=direction * 3 * number_of_unit)
-            ),
+            get_quarter_start(add_to_date(today, months=direction * 3 * number_of_unit)),
             get_quarter_ending(add_to_date(today, months=direction * 3)),
         ]
     if unit == "year":
         dates = [
             get_year_start(add_to_date(today, years=direction * number_of_unit)),
             get_year_ending(add_to_date(today, years=direction)),
+        ]
+    if unit == "fiscal year":
+        dates = [
+            get_fy_start(add_to_date(today, years=direction * number_of_unit)),
+            get_fiscal_year_ending(add_to_date(today, years=direction)),
         ]
 
     if dates[0] > dates[1]:
@@ -678,32 +659,30 @@ class SQLQueryBuilder:
         self._measures = []
         self._dimensions = []
         self._order_by_columns = []
-        self._limit = 100
+        self._limit = None
 
         assisted_query = self.query.variant_controller.query_json
-        if not assisted_query or not assisted_query.table:
+        if not assisted_query or not assisted_query.is_valid():
             return ""
         main_table = assisted_query.table.table
         main_table = self.make_table(main_table)
 
         for join in assisted_query.joins:
-            if not join.left_table or not join.right_table:
+            if not join.is_valid():
                 continue
             self._joins.append(
                 {
                     "left": self.make_table(join.left_table.table),
                     "right": self.make_table(join.right_table.table),
                     "type": join.join_type.value,
-                    "left_key": self.make_column(
-                        join.left_column.column, join.left_table.table
-                    ),
+                    "left_key": self.make_column(join.left_column.column, join.left_table.table),
                     "right_key": self.make_column(
                         join.right_column.column, join.right_table.table
                     ),
                 }
             )
 
-        def make_sql_column(column):
+        def make_sql_column(column, for_filter=False):
             _column = self.make_column(column.column, column.table)
             if column.is_expression():
                 _column = self.expression_processor.process(column.expression.ast)
@@ -711,14 +690,16 @@ class SQLQueryBuilder:
             if column.is_aggregate():
                 _column = self.aggregations.apply(column.aggregation, _column)
 
-            if column.has_granularity():
+            if column.has_granularity() and not for_filter:
                 _column = self.column_formatter.format_date(column.granularity, _column)
             return _column.label(column.alias)
 
         if assisted_query.filters:
             filters = []
             for fltr in assisted_query.filters:
-                _column = make_sql_column(fltr.column)
+                if not fltr.is_valid():
+                    continue
+                _column = make_sql_column(fltr.column, for_filter=True)
                 filter_value = fltr.value.value
                 operator = fltr.operator.value
 
@@ -739,24 +720,32 @@ class SQLQueryBuilder:
             self._filters = and_(*filters)
 
         for column in assisted_query.columns:
+            if not column.is_valid():
+                continue
             self._columns.append(make_sql_column(column))
 
         # don't select calculated columns
         # since they are used as variables in measures, dimensions, filters, etc
 
         for measure in assisted_query.measures:
+            if not measure.is_valid():
+                continue
             self._measures.append(make_sql_column(measure))
 
         for dimension in assisted_query.dimensions:
+            if not dimension.is_valid():
+                continue
             self._dimensions.append(make_sql_column(dimension))
 
         for order in assisted_query.orders:
+            if not order.is_valid():
+                continue
             _column = make_sql_column(order)
             self._order_by_columns.append(
                 _column.asc() if order.order == "asc" else _column.desc()
             )
 
-        self._limit = assisted_query.limit or 100
+        self._limit = assisted_query.limit or None
 
         columns = self._columns + self._dimensions + self._measures
         if not columns:
@@ -778,6 +767,6 @@ class SQLQueryBuilder:
             query = query.group_by(*self._dimensions)
         if self._order_by_columns:
             query = query.order_by(*self._order_by_columns)
-        query = query.limit(self._limit)
+        query = query.limit(self._limit) if self._limit else query
 
         return self.compile(query)

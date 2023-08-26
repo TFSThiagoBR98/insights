@@ -1,7 +1,7 @@
 <script setup lang="jsx">
 import UsePopover from '@/components/UsePopover.vue'
-import { useDataSource } from '@/datasource/useDataSource'
-import useDataSources from '@/datasource/useDataSources'
+import useDataSource from '@/datasource/useDataSource'
+import useDataSourceStore from '@/stores/dataSourceStore'
 import { whenever } from '@vueuse/core'
 import { computed, ref } from 'vue'
 
@@ -13,8 +13,8 @@ const table = computed({
 })
 
 const selectedDataSource = ref(null)
-const sources = useDataSources()
-sources.reload()
+const sources = useDataSourceStore()
+
 const sourceOptions = computed(() =>
 	sources.list.map((source) => ({
 		label: source.title,
@@ -23,31 +23,12 @@ const sourceOptions = computed(() =>
 	}))
 )
 
-const tableOptions = ref([])
+let tableOptions = ref([])
 whenever(selectedDataSource, async (newVal, oldVal) => {
 	if (newVal == oldVal) return
 	const dataSource = useDataSource(selectedDataSource.value)
-	await dataSource.fetch_tables()
-
-	tableOptions.value = dataSource.tables
-		.filter((t) => !t.hidden)
-		// remove duplicates
-		.filter((sourceTable, index, self) => {
-			return (
-				self.findIndex((t) => {
-					return t.table === sourceTable.table
-				}) === index
-			)
-		})
-		.map((sourceTable) => {
-			return {
-				table: sourceTable.table,
-				value: sourceTable.table,
-				label: sourceTable.label,
-				description: sourceTable.table,
-				data_source: dataSource.doc.name,
-			}
-		})
+	await dataSource.fetchTables()
+	tableOptions.value = dataSource.dropdownOptions
 })
 
 const trigger = ref(null)
@@ -62,19 +43,19 @@ const filteredSourceOptions = computed(() => {
 		.filter((source) =>
 			source.label.toLowerCase().includes(datasourceSearchTerm.value.toLowerCase())
 		)
-		.slice(0, 25)
+		.slice(0, 50)
 })
 
 const tablePopover = ref(null)
 const tableSearchTerm = ref('')
 const filteredTableOptions = computed(() => {
-	if (!tableSearchTerm.value) return tableOptions.value
+	if (!tableSearchTerm.value) return tableOptions.value.slice(0, 50)
 	if (!tableOptions.value) return []
 	return tableOptions.value
 		.filter((option) =>
 			option.label.toLowerCase().includes(tableSearchTerm.value.toLowerCase())
 		)
-		.slice(0, 25)
+		.slice(0, 50)
 })
 function handleTableSelect(selectedTable) {
 	selectedDataSource.value = null
@@ -94,16 +75,14 @@ function handleTableSelect(selectedTable) {
 			<span> {{ table?.label || 'Pick starting data' }} </span>
 		</div>
 		<UsePopover ref="dataSourcePopover" v-if="trigger" :targetElement="trigger">
-			<div class="w-[12rem] rounded bg-white text-base shadow transition-[width]">
-				<div class="flex items-center rounded-t-md border-b bg-white">
-					<Input
-						iconLeft="search"
-						class="rounded-b-none border-none bg-transparent text-sm focus:shadow-none focus:outline-none focus:ring-0"
-						v-model="datasourceSearchTerm"
-						placeholder="Search data source..."
-					/>
-				</div>
-				<div class="max-h-48 overflow-y-auto text-sm">
+			<div class="w-[12rem] rounded bg-white p-1.5 text-base shadow transition-all">
+				<Input
+					iconLeft="search"
+					:value="datasourceSearchTerm"
+					@input="datasourceSearchTerm = $event"
+					placeholder="Find data source"
+				/>
+				<div class="mt-1 max-h-48 overflow-y-auto text-sm">
 					<p
 						v-if="sourceOptions?.length === 0 || filteredSourceOptions?.length === 0"
 						class="p-2 text-center text-gray-600"
@@ -117,7 +96,7 @@ function handleTableSelect(selectedTable) {
 					>
 						<div
 							ref="submenu"
-							class="flex cursor-pointer items-center justify-between p-2 transition-all hover:bg-gray-100"
+							class="flex cursor-pointer items-center justify-between rounded p-2 transition-all hover:bg-gray-100"
 							:class="selectedDataSource === source.value ? 'bg-gray-100' : ''"
 							@click="selectedDataSource = source.value"
 						>
@@ -131,17 +110,15 @@ function handleTableSelect(selectedTable) {
 							placement="right-start"
 						>
 							<div
-								class="-ml-2 w-[12rem] rounded border bg-white text-base shadow transition-[width]"
+								class="-ml-2 w-[12rem] rounded border bg-white p-1.5 text-base shadow transition-all"
 							>
-								<div class="flex items-center rounded-t-md border-b bg-white">
-									<Input
-										iconLeft="search"
-										class="rounded-b-none border-none bg-transparent text-sm focus:shadow-none focus:outline-none focus:ring-0"
-										v-model="tableSearchTerm"
-										placeholder="Search table..."
-									/>
-								</div>
-								<div class="max-h-48 overflow-y-auto text-sm">
+								<Input
+									iconLeft="search"
+									:value="tableSearchTerm"
+									@input="tableSearchTerm = $event"
+									placeholder="Find table"
+								/>
+								<div class="mt-1 max-h-48 overflow-y-auto text-sm">
 									<p
 										v-if="
 											tableOptions?.length === 0 ||

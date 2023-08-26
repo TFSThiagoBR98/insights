@@ -12,11 +12,12 @@ import ResizeableInput from './ResizeableInput.vue'
 
 const emit = defineEmits(['update:modelValue'])
 const props = defineProps({
+	data_source: String,
 	column: Object,
 	operator: Object,
 	modelValue: Object,
 })
-const value = computed({
+const modelValue = computed({
 	get: () => props.modelValue,
 	set: (value) => emit('update:modelValue', value),
 })
@@ -52,22 +53,32 @@ const columnValues = ref([])
 const fetchingColumnValues = ref(false)
 const checkAndFetchColumnValues = debounce(async function (search_text = '') {
 	if (!isEqualityCheck.value) return
-	if (props.column?.type == 'String' && props.column?.data_source) {
+	if (props.column?.type == 'String' && props.data_source) {
 		const URL = 'insights.api.fetch_column_values'
 		fetchingColumnValues.value = true
 		const values = await call(URL, {
-			data_source: props.column.data_source,
+			data_source: props.data_source,
 			table: props.column.table,
 			column: props.column.column,
 			search_text,
 		})
 		columnValues.value = values.map((value) => ({ label: value, value }))
+		// prepend the selected value to the list
+		if (Array.isArray(modelValue.value.value)) {
+			// modelValue.value = {label: '2 selected', value: [{ label: '', value: ''}, ...]}
+			modelValue.value.value.forEach((selectedOption) => {
+				if (!columnValues.value.find((v) => v.value === selectedOption.value)) {
+					columnValues.value.unshift(selectedOption)
+				}
+			})
+		}
 		fetchingColumnValues.value = false
 	}
 }, 300)
 whenever(
 	() => selectorType.value == 'combobox',
-	() => checkAndFetchColumnValues()
+	() => checkAndFetchColumnValues(),
+	{ immediate: true }
 )
 const ColumnValueCombobox = (props) => (
 	<Combobox
@@ -125,14 +136,14 @@ const selectorComponentMap = {
 <template>
 	<ResizeableInput
 		v-if="selectorType === 'text'"
-		v-model="value.value"
+		v-model="modelValue.value"
 		placeholder="Type a value"
-		@update:modelValue="value = { value: $event, label: $event }"
+		@update:modelValue="modelValue = { value: $event, label: $event }"
 	></ResizeableInput>
 
 	<InputWithPopover
 		v-else
-		v-model="value"
+		v-model="modelValue"
 		:disableInput="isMultiValue"
 		placeholder="Value"
 		@input="selectorType === 'combobox' && checkAndFetchColumnValues($event)"

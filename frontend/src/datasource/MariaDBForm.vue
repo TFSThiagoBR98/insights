@@ -1,7 +1,7 @@
 <script setup>
-import { computed, reactive, ref } from 'vue'
 import Form from '@/pages/Form.vue'
-import useDataSources from './useDataSources'
+import useDataSourceStore from '@/stores/dataSourceStore'
+import { computed, reactive, ref } from 'vue'
 
 const props = defineProps({ submitLabel: String })
 const emit = defineEmits(['submit'])
@@ -50,7 +50,7 @@ const fields = [
 	{ label: 'Use secure connection (SSL)?', name: 'useSSL', type: 'checkbox' },
 ]
 
-const sources = useDataSources()
+const sources = useDataSourceStore()
 const areRequiredFieldsFilled = computed(() => {
 	return Boolean(fields.filter((field) => field.required).every((field) => database[field.name]))
 })
@@ -59,11 +59,6 @@ const testConnectionDisabled = computed(() => {
 })
 
 const connected = ref(null)
-const connectAppearance = computed(() => {
-	if (sources.testing || connected.value === null) return 'white'
-	if (connected.value) return 'success'
-	return 'danger'
-})
 const connectLabel = computed(() => {
 	if (sources.testing) return ''
 	if (connected.value === null) return 'Connect'
@@ -96,7 +91,7 @@ const creating = ref(false)
 const createNewDatabase = async () => {
 	database['type'] = 'MariaDB'
 	creating.value = true
-	await sources.createDatabase({ database })
+	await sources.create({ database })
 	creating.value = false
 	emit('submit')
 }
@@ -107,7 +102,7 @@ const createNewDatabase = async () => {
 	<div class="mt-6 flex justify-between pt-2">
 		<div class="ml-auto flex items-center space-x-2">
 			<Button
-				:variant="connectAppearance"
+				variant="outline"
 				:disabled="testConnectionDisabled"
 				@click="testConnection"
 				loadingText="Connecting..."

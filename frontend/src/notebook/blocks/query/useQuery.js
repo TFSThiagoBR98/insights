@@ -1,11 +1,13 @@
 import useChart from '@/query/useChart'
 import { useQueryResource } from '@/query/useQueryResource'
+import useAuthStore from '@/stores/authStore'
 import { safeJSONParse } from '@/utils'
-import auth from '@/utils/auth'
 import { getFormattedResult } from '@/utils/query/results'
 import { watchDebounced, watchOnce } from '@vueuse/core'
-import { debounce } from 'frappe-ui'
+import { call, debounce } from 'frappe-ui'
 import { computed, reactive } from 'vue'
+
+const auth = useAuthStore()
 
 const queries = {}
 
@@ -29,28 +31,30 @@ function makeQuery(name) {
 		chart: {},
 		sourceSchema: [],
 		formattedResults: [],
+		resultColumns: [],
 	})
 
-	state.reload = async function () {
-		return resource.get.fetch().then((doc) => {
-			state.doc = doc
-			state.isOwner = state.doc.owner == auth.user.user_id
-			state.loading = false
-			state.unsaved = false
-		})
+	state.reload = async () => {
+		return resource.get.fetch().then(() => state.syncDoc())
 	}
-	state.reload()
+
+	state.syncDoc = async function () {
+		state.doc = resource.doc
+		state.isOwner = state.doc.owner == auth.user.user_id
+		state.loading = false
+		state.unsaved = false
+	}
 
 	state.convertToNative = async function () {
 		state.loading = true
 		await resource.convert_to_native.submit()
-		await state.reload()
+		await state.syncDoc()
 		state.loading = false
 	}
 	state.convertToAssisted = async function () {
 		state.loading = true
 		await resource.convert_to_assisted.submit()
-		await state.reload()
+		await state.syncDoc()
 		state.loading = false
 	}
 
@@ -64,7 +68,7 @@ function makeQuery(name) {
 		await state.save()
 		await resource.run
 			.submit()
-			.then(() => state.reload())
+			.then(() => state.syncDoc())
 			.catch((e) => {
 				console.error(e)
 			})
@@ -75,53 +79,45 @@ function makeQuery(name) {
 		state.loading = true
 		const updatedFields = getUpdatedFields()
 		await resource.setValue.submit(updatedFields)
-		await state.reload()
+		await state.syncDoc()
 		state.loading = false
 	}
 
 	function getUpdatedFields() {
 		if (!state.doc.data_source) return
-		if (state.doc.is_native_query) {
-			return {
-				sql: state.doc.sql,
-				data_source: state.doc.data_source,
-				title: state.doc.title,
-			}
-		} else {
-			return {
-				json: JSON.stringify(safeJSONParse(state.doc.json), null, 2),
-				data_source: state.doc.data_source,
-				title: state.doc.title,
-			}
+		const updatedFields = {
+			data_source: state.doc.data_source,
+			sql: state.doc.sql,
+			script: state.doc.script,
+			json: JSON.stringify(safeJSONParse(state.doc.json), null, 2),
 		}
+		return updatedFields
 	}
 
-	watchOnce(
-		() => state.autosave,
-		() => {
-			function saveIfChanged(newVal, oldVal) {
-				if (!oldVal || !newVal) return
-				if (state.loading) return
-				if (JSON.stringify(newVal) == JSON.stringify(oldVal)) return
-				state.save()
-			}
-			// TODO: fix the weird bug where the inputs are not selected when auto-saving
-			watchDebounced(getUpdatedFields, saveIfChanged, { deep: true, debounce: 1000 })
+	watchOnce(() => state.autosave, setupAutosaveListener)
+
+	function setupAutosaveListener() {
+		const saveIfChanged = function (newVal, oldVal) {
+			if (!oldVal || !newVal) return
+			if (JSON.stringify(newVal) == JSON.stringify(oldVal)) return
+			state.save()
 		}
-	)
+		watchDebounced(getUpdatedFields, saveIfChanged, { deep: true, debounce: 1000 })
+	}
 
 	const setUnsaved = (newVal, oldVal) => {
 		if (state.unsaved) return
 		if (!oldVal || !newVal) return
-		if (state.loading) return
 		if (JSON.stringify(newVal) == JSON.stringify(oldVal)) return
 		state.unsaved = true
 	}
 	watchDebounced(getUpdatedFields, setUnsaved, { deep: true, debounce: 500 })
 
 	state.fetchSourceSchema = async () => {
-		const response = await resource.get_source_schema.fetch()
-		state.sourceSchema = response.message
+		if (!state.doc.data_source) return
+		state.sourceSchema = await call('insights.api.get_source_schema', {
+			data_source: state.doc.data_source,
+		})
 	}
 
 	state.loadChart = async () => {
@@ -144,7 +140,7 @@ function makeQuery(name) {
 	state.updateDoc = async (doc) => {
 		state.loading = true
 		await resource.setValue.submit(doc)
-		await state.reload()
+		await state.syncDoc()
 		state.loading = false
 	}
 
@@ -156,4 +152,17 @@ function makeQuery(name) {
 	}
 
 	return state
+}
+
+function throttle(func, limit) {
+	let inThrottle
+	return function () {
+		const args = arguments
+		const context = this
+		if (!inThrottle) {
+			func.apply(context, args)
+			inThrottle = true
+			setTimeout(() => (inThrottle = false), limit)
+		}
+	}
 }

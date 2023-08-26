@@ -1,10 +1,12 @@
+import { useQueryResource } from '@/query/useQueryResource'
+import useAuthStore from '@/stores/authStore'
 import { safeJSONParse } from '@/utils'
-import auth from '@/utils/auth'
 import widgets from '@/widgets/widgets'
-import { createDocumentResource } from 'frappe-ui'
+import { createDocumentResource, debounce } from 'frappe-ui'
 import { getLocal, saveLocal } from 'frappe-ui/src/resources/local'
 import { reactive } from 'vue'
-import { useQueryResource } from '@/query/useQueryResource'
+
+const auth = useAuthStore()
 
 export default function useDashboard(name) {
 	const resource = getDashboardResource(name)
@@ -58,6 +60,20 @@ export default function useDashboard(name) {
 		state.currentItem = undefined
 		state.loading = false
 		state.editing = false
+	}
+
+	function exportDashboard() {
+		return resource.export_dashboard.submit().then((res) => {
+			const file_url = res.message.file_url
+			const filename = res.message.file_name
+			const link = document.createElement('a')
+			link.href = file_url
+			link.download = filename
+			link.click()
+			setTimeout(() => {
+				URL.revokeObjectURL(file_url)
+			}, 3000)
+		})
 	}
 
 	async function deleteDashboard() {
@@ -120,14 +136,14 @@ export default function useDashboard(name) {
 			if (item.item_id === filter_id) {
 				const charts = Object.keys(item.options.links) || []
 				charts.forEach((chart) => {
-					updateChartFilters(chart)
+					refreshChartFilters(chart)
 				})
 				return true
 			}
 		})
 	}
 
-	async function updateChartFilters(chart_id) {
+	async function refreshChartFilters(chart_id) {
 		const promises = state.doc.items
 			.filter((item) => item.item_type === 'Filter')
 			.map(async (filter) => {
@@ -150,7 +166,7 @@ export default function useDashboard(name) {
 
 	async function getChartFilters(chart_id) {
 		if (!state.filtersByChart[chart_id]) {
-			await updateChartFilters(chart_id)
+			await refreshChartFilters(chart_id)
 		}
 		return state.filtersByChart[chart_id]
 	}
@@ -167,11 +183,16 @@ export default function useDashboard(name) {
 			throw new Error(`Query not found for item ${itemId}`)
 		}
 		const filters = await getChartFilters(itemId)
-		const { message: results } = await resource.fetch_chart_data.submit({
-			item_id: itemId,
-			query_name: queryName,
-			filters,
-		})
+		const results = resource.fetch_chart_data
+			.submit({
+				item_id: itemId,
+				query_name: queryName,
+				filters,
+			})
+			.then((res) => res.message)
+			.catch((err) => {
+				console.error(err)
+			})
 		return results
 	}
 
@@ -197,17 +218,10 @@ export default function useDashboard(name) {
 		state.refreshCallbacks.push(fn)
 	}
 
-	async function updateTitle(title) {
+	const updateTitle = debounce(function (title) {
 		if (!title || !state.editing) return
-		resource.setValue.submit({ title }).then(() => {
-			$notify({
-				title: 'Dashboard title updated',
-				variant: 'success',
-			})
-			state.doc.title = title
-		})
-		reload()
-	}
+		state.doc.title = title
+	}, 500)
 
 	function makeLayoutObject(item) {
 		return {
@@ -261,6 +275,11 @@ export default function useDashboard(name) {
 	const toggleSidebar = () => (state.sidebar.open = !state.sidebar.open)
 	const setSidebarPosition = (position) => (state.sidebar.position = position)
 	const isChart = (item) => !['Filter', 'Text'].includes(item.item_type)
+	const resetOptions = (item) => {
+		item.options = {
+			query: item.options.query,
+		}
+	}
 
 	return Object.assign(state, {
 		reload,
@@ -273,7 +292,7 @@ export default function useDashboard(name) {
 		getFilterState,
 		setFilterState,
 		refreshFilter,
-		updateChartFilters,
+		refreshChartFilters,
 		edit,
 		discardChanges,
 		toggleSidebar,
@@ -285,6 +304,8 @@ export default function useDashboard(name) {
 		isChart,
 		togglePublicAccess,
 		loadCurrentItemQuery,
+		exportDashboard,
+		resetOptions,
 	})
 }
 
@@ -293,10 +314,10 @@ function getDashboardResource(name) {
 		doctype: 'Insights Dashboard',
 		name: name,
 		whitelistedMethods: {
-			savestate: 'savestate',
 			fetch_chart_data: 'fetch_chart_data',
 			clear_charts_cache: 'clear_charts_cache',
 			is_private: 'is_private',
+			export_dashboard: 'export_dashboard',
 		},
 		transform(doc) {
 			doc.items = doc.items.map(transformItem)

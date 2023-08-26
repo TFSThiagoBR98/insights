@@ -72,6 +72,7 @@ def get_table_name(data_source, table):
 
 @frappe.whitelist()
 @check_role("Insights User")
+@redis_cache(ttl=60 * 60 * 24)
 def get_tables(data_source=None, with_query_tables=False):
     if not data_source:
         return []
@@ -113,6 +114,10 @@ def get_dashboard_list():
             pluck="parent",
         )
         dashboard["charts_count"] = len(dashboard["charts"])
+        dashboard["view_count"] = frappe.db.count(
+            "View Log",
+            filters={"reference_doctype": "Insights Dashboard", "reference_name": dashboard.name},
+        )
 
         dashboard["is_private"] = is_private("Insights Dashboard", dashboard.name)
 
@@ -142,7 +147,7 @@ def get_queries():
 
     Query = frappe.qb.DocType("Insights Query")
     QueryTable = frappe.qb.DocType("Insights Query Table")
-    QueryChart = frappe.qb.DocType("Insights Query Chart")
+    QueryChart = frappe.qb.DocType("Insights Chart")
     GroupConcat = CustomFunction("Group_Concat", ["column"])
     return (
         frappe.qb.from_(Query)
@@ -159,7 +164,7 @@ def get_queries():
             GroupConcat(QueryTable.label).as_("tables"),
             Query.data_source,
             Query.creation,
-            QueryChart.type.as_("chart_type"),
+            QueryChart.chart_type,
         )
         .where(Query.name.isin(allowed_queries))
         .groupby(Query.name)
@@ -173,8 +178,12 @@ def create_query(**query):
     track("create_query")
     doc = frappe.new_doc("Insights Query")
     doc.title = query.get("title")
-    doc.data_source = query.get("data_source") or "Demo Data"
+    doc.data_source = query.get("data_source")
     doc.is_assisted_query = query.get("is_assisted_query")
+    doc.is_native_query = query.get("is_native_query")
+    doc.is_script_query = query.get("is_script_query")
+    if query.get("is_script_query"):
+        doc.data_source = "Query Store"
     if table := query.get("table") and not doc.is_assisted_query:
         doc.append(
             "tables",
@@ -327,12 +336,12 @@ def create_data_source_for_csv():
 
 @frappe.whitelist()
 @check_role("Insights User")
-def import_csv(table_label, table_name, filename, if_exists, columns):
+def import_csv(table_label, table_name, filename, if_exists, columns, data_source):
 
     create_data_source_for_csv()
 
     table_import = frappe.new_doc("Insights Table Import")
-    table_import.data_source = "File Uploads"
+    table_import.data_source = data_source
     table_import.table_label = table_label
     table_import.table_name = table_name
     table_import.if_exists = if_exists
@@ -563,3 +572,8 @@ def contact_team(message_type, message_content, is_critical=False):
     except Exception as e:
         frappe.log_error(e)
         frappe.throw("Something went wrong. Please try again later.")
+
+
+@frappe.whitelist()
+def get_source_schema(data_source):
+    return frappe.get_doc("Insights Data Source", data_source).get_schema()

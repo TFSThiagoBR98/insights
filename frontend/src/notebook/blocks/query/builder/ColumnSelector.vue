@@ -1,6 +1,6 @@
 <script setup>
 import UsePopover from '@/components/UsePopover.vue'
-import { useDataSourceTable } from '@/datasource/useDataSource'
+import useDataSourceTable from '@/datasource/useDataSourceTable'
 import { computed, ref, watch } from 'vue'
 const props = defineProps({
 	data_source: String,
@@ -34,10 +34,10 @@ watch(
 )
 
 const columns = computed(() => {
-	const localColumns = props.localColumns.filter(filterFn)
+	const localColumns = props.localColumns.filter(filterFn).map((c) => ({ ...c, isLocal: true }))
 	if (!tables.value?.length) return localColumns
 	const tableColumns = tables.value
-		.map((d) => d.doc?.columns)
+		.map((table) => table.columns)
 		.flat()
 		.filter(filterFn)
 	return localColumns.concat(tableColumns)
@@ -49,8 +49,12 @@ function filterFn(col, currIndex, self) {
 }
 function getColumnValue(column) {
 	if (!column) return
-	if (column.description == 'local') return column.alias
-	return column.expression?.raw || `${column.table}.${column.column}`
+	if (column.expression?.raw) return column.expression.raw
+
+	let value = `${column.table}.${column.column}`
+	if (column.granularity) value = `${column.granularity}(${value})`
+	if (column.aggregation) value = `${column.aggregation}(${value})`
+	return value
 }
 
 const columnOptions = computed(() => {
@@ -58,8 +62,8 @@ const columnOptions = computed(() => {
 	return columns.value.map((c) => {
 		return {
 			label: c.label || c.alias,
-			description: c.description || c.table,
-			table_label: c.table_label,
+			group: c.isLocal ? 'Local' : c.table_label,
+			description: c.column,
 			value: getColumnValue(c),
 		}
 	})
@@ -69,8 +73,9 @@ const columnOptionsGroupedByTable = computed(() => {
 	if (!columnOptions.value?.length) return []
 	const grouped = {}
 	columnOptions.value.forEach((c) => {
-		if (!grouped[c.table_label]) grouped[c.table_label] = []
-		grouped[c.table_label].push(c)
+		if (c.description == 'local') c.group = 'Local'
+		if (!grouped[c.group]) grouped[c.group] = []
+		grouped[c.group].push(c)
 	})
 	return grouped
 })
@@ -88,15 +93,17 @@ const column = computed({
 		),
 	set: (option) => {
 		const column = findOptionByValue(columns.value, option.value)
+		const passedValue = valuePropPassed.value ? props.value : props.modelValue
 		emit('update:modelValue', {
 			...column,
 			...option,
-			alias: column.alias || props.modelValue.alias,
-			order: column.order || props.modelValue.order,
-			granularity: column.granularity || props.modelValue.granularity,
-			aggregation: column.aggregation || props.modelValue.aggregation,
-			format: column.format || props.modelValue.format,
-			expression: column.expression || props.modelValue.expression,
+			alias: column.alias || passedValue.alias,
+			order: column.order || passedValue.order,
+			granularity: column.granularity || passedValue.granularity,
+			aggregation: column.aggregation || passedValue.aggregation,
+			format: column.format || passedValue.format,
+			expression: column.expression || passedValue.expression,
+			meta: column.meta || passedValue.meta,
 		})
 	},
 })
@@ -141,19 +148,17 @@ function handleColumnSelect(col) {
 			class="flex h-7 w-full cursor-pointer items-center overflow-hidden text-ellipsis !whitespace-nowrap px-2.5 leading-7 outline-none ring-0 transition-all focus:outline-none"
 			:class="column?.label ? '' : 'text-gray-500'"
 		>
-			<span> {{ column?.label || 'Pick a column' }} </span>
+			<span> {{ column?.label || 'Column' }} </span>
 		</div>
 		<UsePopover ref="columnPopover" v-if="trigger" :targetElement="trigger">
-			<div class="w-[12rem] rounded bg-white text-base shadow transition-[width]">
-				<div class="flex items-center rounded-t-md border-b bg-white">
-					<Input
-						iconLeft="search"
-						class="rounded-b-none border-none bg-transparent text-sm focus:shadow-none focus:outline-none focus:ring-0"
-						v-model="columnSearchTerm"
-						placeholder="Search column..."
-					/>
-				</div>
-				<div class="max-h-48 overflow-y-auto text-sm">
+			<div class="min-w-[12rem] rounded bg-white p-1.5 text-base shadow transition-all">
+				<Input
+					iconLeft="search"
+					:value="columnSearchTerm"
+					@input="columnSearchTerm = $event"
+					placeholder="Find column"
+				/>
+				<div class="mt-1 max-h-48 overflow-y-auto text-sm">
 					<p
 						v-if="
 							columnOptions?.length === 0 ||
@@ -165,7 +170,7 @@ function handleColumnSelect(col) {
 					</p>
 					<div v-else v-for="table in Object.keys(filteredColumnOptionsGroupedByTable)">
 						<div
-							class="sticky top-0 flex items-center border-b bg-white px-2 py-1 text-gray-700"
+							class="sticky top-0 flex items-center bg-white px-2 py-1 text-gray-700"
 						>
 							<FeatherIcon name="table" class="mr-1 h-3.5 w-3.5" />
 							<span class="flex-1 py-0.5 text-sm">
@@ -174,11 +179,12 @@ function handleColumnSelect(col) {
 						</div>
 						<div v-for="col in filteredColumnOptionsGroupedByTable[table]">
 							<div
-								class="flex cursor-pointer items-center justify-between p-2 transition-all hover:bg-gray-100"
+								class="flex cursor-pointer items-center justify-between space-x-8 rounded p-2 transition-all hover:bg-gray-100"
 								:class="column?.value === col.value ? 'bg-gray-100' : ''"
 								@click="handleColumnSelect(col)"
 							>
 								<span>{{ col.label }}</span>
+								<span class="text-xs text-gray-500">{{ col.description }}</span>
 							</div>
 						</div>
 					</div>

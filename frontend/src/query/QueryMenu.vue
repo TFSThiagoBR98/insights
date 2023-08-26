@@ -11,12 +11,23 @@
 							onClick: storeQuery,
 					  }
 					: null,
+				!query.doc.is_saved_as_table
+					? {
+							label: 'Save as Table',
+							icon: 'bookmark',
+							onClick: () => (show_save_table_dialog = true),
+					  }
+					: {
+							label: 'Delete Linked Table',
+							icon: 'trash-2',
+							onClick: () => (show_save_table_dialog = true),
+					  },
 				{
 					label: 'Execute (⌘+E)',
 					icon: 'play',
 					onClick: query.execute,
 				},
-				settings.doc?.enable_permissions && query.isOwner
+				settings.enable_permissions && query.isOwner
 					? {
 							label: 'Share',
 							icon: 'share-2',
@@ -99,6 +110,39 @@
 							query.delete.submit().then(() => {
 								$router.push('/query')
 								show_delete_dialog = false
+							})
+						},
+					},
+				],
+			}"
+		>
+		</Dialog>
+
+		<Dialog
+			v-model="show_save_table_dialog"
+			:dismissable="true"
+			:options="{
+				title: query.doc.is_saved_as_table ? 'Delete Linked Table' : 'Save as Table',
+				message: query.doc.is_saved_as_table
+					? 'Are you sure you want to deleted the linked table? You will not be able to use this query as a table in other queries.'
+					: 'You can save this query as a table to reuse it in other queries as a table. Tip: Give a proper title to the query before saving it as a table.',
+				icon: {
+					appearance: 'primary',
+					name: query.doc.is_saved_as_table ? 'trash-2' : 'bookmark',
+				},
+				actions: [
+					{
+						label: query.doc.is_saved_as_table ? 'Unlink' : 'Save',
+						variant: 'solid',
+						loading: query.doc.is_saved_as_table
+							? query.delete_linked_table?.loading
+							: query.save_as_table?.loading,
+						onClick: () => {
+							const fn = query.doc.is_saved_as_table
+								? query.delete_linked_table
+								: query.save_as_table
+							fn.submit().then(() => {
+								show_save_table_dialog = false
 							})
 						},
 					},
@@ -289,7 +333,7 @@
 	</div>
 
 	<ShareDialog
-		v-if="settings.doc?.enable_permissions"
+		v-if="settings.enable_permissions"
 		v-model:show="show_share_dialog"
 		:resource-type="query.doc.doctype"
 		:resource-name="query.doc.name"
@@ -306,15 +350,18 @@
 import AlertDialog from '@/components/AlertDialog.vue'
 import ShareDialog from '@/components/ShareDialog.vue'
 import { copyToClipboard } from '@/utils'
-import settings from '@/utils/settings'
+import settingsStore from '@/stores/settingsStore'
 import { useMagicKeys } from '@vueuse/core'
 import { Dialog, Dropdown } from 'frappe-ui'
 import { computed, inject, nextTick, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 
+const settings = settingsStore().settings
+
 const props = defineProps(['query'])
 const query = props.query || inject('query')
 
+const show_save_table_dialog = ref(false)
 const show_reset_dialog = ref(false)
 const show_delete_dialog = ref(false)
 const show_sql_dialog = ref(false)

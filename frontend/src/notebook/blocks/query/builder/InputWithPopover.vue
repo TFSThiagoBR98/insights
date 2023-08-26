@@ -9,7 +9,7 @@ const props = defineProps({
 	value: { type: Object, default: undefined },
 	modelValue: Object,
 	placeholder: String,
-	items: Array,
+	items: { type: Array, default: () => [] },
 	disableFilter: Boolean,
 	disableInput: Boolean,
 	placement: { type: String, default: 'bottom-start' },
@@ -25,10 +25,12 @@ watch(selectedItem, () => (searchText.value = selectedItem.value?.label))
 const filteredItems = computed(() => {
 	if (props.disableFilter) return props.items
 	if (!searchText.value) return props.items
+	if (props.items.length === 0) return []
+	if (props.items.length < 10) return props.items
 	return props.items.filter(
 		(item) =>
-			item.label.toLowerCase().includes(searchText.value.toLowerCase()) ||
-			item.value.toLowerCase().includes(searchText.value.toLowerCase())
+			item.label?.toLowerCase().includes(searchText.value.toLowerCase()) ||
+			item.value?.toLowerCase().includes(searchText.value.toLowerCase())
 	)
 })
 
